@@ -55,11 +55,22 @@ def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01',
 
     return data, found_files
 
+def get_device(my_device):
+    if my_device is not None:
+        assert my_device in ['cuda', 'cpu', 'mps']
+        return my_device
+
+    if torch.cuda.is_available():
+        return 'cuda'
+    elif torch.backends.mps.is_available():
+        return 'mps'
+    else:
+        return 'cpu'
 
 class TransformerConfig:
 
     def __init__(self,
-                 my_device='cuda',
+                 my_device=None,
                  precision=torch.bfloat16,
                  batch_size=64,
                  block_size=32,
@@ -71,7 +82,11 @@ class TransformerConfig:
                  causal=True,
                  learning_rate=1e-3
                  ):
-        self.my_device = my_device
+
+        self.my_device = get_device(my_device)
+
+        print(f"Using device: {self.my_device}")
+
         self.causal = causal
 
         self.batch_size = batch_size
@@ -196,7 +211,7 @@ class AbstractRunner(object):
     def __init__(self, config: TransformerConfig, model: nn.Module, data_loader: GenericDataloader):
         self.model = model.to(config.my_device, dtype=config.precision)
         self.parameters = self.model.parameters()
-        # self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs") # , fullgraph=True
+        self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs") # , fullgraph=True
         self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate)
         self.config = config
         self.current_iteration = 0
