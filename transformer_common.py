@@ -158,7 +158,7 @@ class AbstractRunner(object):
         if not os.path.exists(f"model-{model_version}.pt"):
             print(f"Model version {model_version} not found")
             return False
-        self.model.load_state_dict(torch.load(f"model-{model_version}.pt"))
+        self.model.load_state_dict(torch.load(f"model-{model_version}.pt", map_location=torch.device(self.config.my_device)))
         print(f"loaded model version {model_version}")
         return True
 
