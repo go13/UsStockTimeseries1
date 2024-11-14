@@ -22,7 +22,6 @@ def get_device(my_device):
 
 class TransformerConfig:
     def __init__(self,
-                 my_device=None,
                  precision=torch.bfloat16,
                  batch_size=64,
                  block_size=32,
@@ -32,7 +31,8 @@ class TransformerConfig:
                  n_head=4,
                  n_layer=4,
                  causal=True,
-                 learning_rate=1e-3
+                 learning_rate=1e-3,
+                 my_device=None
                  ):
 
         self.my_device = get_device(my_device)
