@@ -59,7 +59,7 @@ class TransformerConfig:
 
         self.precision = precision
 
-        self.save_model_periodically_every_n_iterations = 100
+        self.save_model_periodically_every_n_iterations = 500
 
 
 class GeluFeedForward(nn.Module):

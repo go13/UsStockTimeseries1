@@ -217,5 +217,6 @@ class KarpathyTransformerRunner(AbstractRunner):
         )
         pass
 
+    @torch.no_grad()
     def generate(self, context, max_new_tokens):
         return self.model.generate(context, max_new_tokens)
