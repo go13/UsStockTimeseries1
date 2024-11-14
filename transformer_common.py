@@ -10,12 +10,6 @@ def dict_weights_to_vector(w):
     return w
 
 
-def distance_triangle(n, my_device):
-    arange_matrix = torch.arange(n, device=my_device).view(-1, 1) - torch.arange(n, device=my_device).view(1, -1)
-    lower_triangular = torch.tril(arange_matrix)
-    return lower_triangular
-
-
 def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01', end_date='2020-12-31'):
     print(f"Reading and merging CSV files: {filenames}")
     # Initialize an empty DataFrame

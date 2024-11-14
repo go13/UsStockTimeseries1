@@ -6,6 +6,12 @@ from transformer_common import GeluFeedForward, TransformerConfig,  \
     AbstractRunner, GenericDataloader
 
 
+def distance_triangle(n, my_device):
+    arange_matrix = torch.arange(n, device=my_device).view(-1, 1) - torch.arange(n, device=my_device).view(1, -1)
+    lower_triangular = torch.tril(arange_matrix)
+    return lower_triangular
+
+
 class PositionalEmbedding(nn.Module):
     def __init__(self, config: TransformerConfig):
         super().__init__()
