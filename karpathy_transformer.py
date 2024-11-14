@@ -3,7 +3,8 @@ from torch import nn as nn
 from torch.nn import functional as F
 
 from transformer_common import GeluFeedForward, TransformerConfig,  \
-    AbstractRunner, GenericDataloader
+    AbstractRunner
+from dataloader import GenericDataloader
 
 
 def distance_triangle(n, my_device):
