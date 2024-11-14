@@ -107,7 +107,7 @@ class TransformerConfig:
 
         self.precision = precision
 
-        self.save_model_periodically_every_n_iterations = -1
+        self.save_model_periodically_every_n_iterations = 100
 
 
 class GeluFeedForward(nn.Module):
@@ -263,8 +263,7 @@ class AbstractRunner(object):
                 t = time.time()
 
                 if self.config.save_model_periodically_every_n_iterations != -1 and self.current_iteration % self.config.save_model_periodically_every_n_iterations == 0:
-                    torch.save(self.model.state_dict(), f"model-{self.model_version}.pt")
-                    print(f"saved model version {self.model_version}")
+                    self.save_model(self.model_version)
                     self.model_version += 1
 
             x, y = get_train_batch()
@@ -274,6 +273,18 @@ class AbstractRunner(object):
             self.current_iteration += 1
 
         return last_loss
+
+    def load_model(self, model_version):
+        if not os.path.exists(f"model-{model_version}.pt"):
+            print(f"Model version {model_version} not found")
+            return False
+        self.model.load_state_dict(torch.load(f"model-{model_version}.pt"))
+        print(f"loaded model version {model_version}")
+        return True
+
+    def save_model(self, model_version):
+        torch.save(self.model.state_dict(), f"model-{model_version}.pt")
+        print(f"saved model version {model_version}")
 
     def get_weights(self):
         return self.model.state_dict()
