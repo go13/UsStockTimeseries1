@@ -76,9 +76,19 @@ class GeluFeedForward(nn.Module):
         return self.net(x)
 
 
+class DataloaderInterface:
+    def get_batch(self, split):
+        raise NotImplementedError()
+
+    def get_train_batch(self):
+        raise NotImplementedError()
+
+    def get_val_batch(self):
+        raise NotImplementedError()
+
 
 class AbstractRunner(object):
-    def __init__(self, config: TransformerConfig, model: nn.Module, data_loader: GenericDataloader):
+    def __init__(self, config: TransformerConfig, model: nn.Module, data_loader: DataloaderInterface):
         self.model = model.to(config.my_device, dtype=config.precision)
         self.parameters = self.model.parameters()
         self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs") # , fullgraph=True

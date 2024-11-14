@@ -1,8 +1,7 @@
 import pandas as pd
 import os
 import torch
-from transformer_common import TransformerConfig
-
+from transformer_common import TransformerConfig, DataloaderInterface
 
 
 def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01', end_date='2020-12-31'):
@@ -52,7 +51,7 @@ def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01',
     return data, found_files
 
 
-class GenericDataloader:
+class GenericDataloader(DataloaderInterface):
 
     def __init__(self, config: TransformerConfig, in_data, out_data):
 
@@ -90,7 +89,7 @@ class GenericDataloader:
         return self.get_batch('test')
 
 
-class TimeseriesDataloader(object):
+class TimeseriesDataloader(DataloaderInterface):
 
     def __init__(self, directory_path, stocks_to_load, my_device='cuda', add_diff=True):
 
