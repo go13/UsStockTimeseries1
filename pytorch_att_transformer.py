@@ -1,6 +1,7 @@
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
+from flash_attn.modules.mha import MHA
 
 from transformer_common import GeluFeedForward, TransformerConfig,  \
     AbstractRunner
@@ -9,6 +10,26 @@ def distance_triangle(n, my_device):
     arange_matrix = torch.arange(n, device=my_device).view(-1, 1) - torch.arange(n, device=my_device).view(1, -1)
     lower_triangular = torch.tril(arange_matrix)
     return lower_triangular
+
+class FlashMultiHeadAttention(nn.Module):
+    def __init__(self, config: TransformerConfig, causal=True):
+        super().__init__()
+        assert torch.bfloat16 == config.precision, 'only bfloat16 is supported - checked 20 aug 23'
+
+        # MHA + rotary requires flash-attention\csrc\rotary>pip install .
+        self.flash_mha = MHA(
+            embed_dim=config.n_embed,  # total channels (= num_heads * head_dim)
+            num_heads=config.n_head,
+            device=config.my_device,
+            dtype=config.precision,
+            dropout=config.dropout,
+            use_flash_attn=True,
+            return_residual=True,
+            dwconv=True,
+            rotary_emb_dim=config.head_size,
+            causal=causal  # auto-regressive or not
+        )
+
 
 class CausalSelfAttention(nn.Module):
     # https: // pytorch.org / docs / stable / generated / torch.nn.functional.scaled_dot_product_attention.html
@@ -27,7 +48,7 @@ class CausalSelfAttention(nn.Module):
         # Perform causal masking
         self.is_causal = is_causal
 
-    def forward(self, x, pos_emb, pos_dist_emb):
+    def forward(self, x):
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         query_projected = self.c_attn(x)
 
@@ -94,16 +115,17 @@ class DistancePositionalEmbedding(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.attention = CausalSelfAttention(
-            num_heads=config.n_head,
-            embed_dimension=config.n_embed,
-            bias=False,
-            is_causal=config.causal,
-            dropout=config.dropout
-        )
+        self.sa = FlashMultiHeadAttention(config, causal=config.causal)
+        # self.attention = CausalSelfAttention(
+        #     num_heads=config.n_head,
+        #     embed_dimension=config.n_embed,
+        #     bias=False,
+        #     is_causal=config.causal,
+        #     dropout=config.dropout
+        # )
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        return self.attention(x, pos_emb, pos_dist_emb)
+        return self.attention(x)
 
 
 class Block(nn.Module):
