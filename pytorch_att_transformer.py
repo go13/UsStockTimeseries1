@@ -30,6 +30,9 @@ class FlashMultiHeadAttention(nn.Module):
             causal=causal  # auto-regressive or not
         )
 
+    def forward(self, x):
+        out = self.flash_mha(x)[0]
+        return out
 
 class CausalSelfAttention(nn.Module):
     # https: // pytorch.org / docs / stable / generated / torch.nn.functional.scaled_dot_product_attention.html
@@ -115,7 +118,7 @@ class DistancePositionalEmbedding(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.sa = FlashMultiHeadAttention(config, causal=config.causal)
+        self.attention = FlashMultiHeadAttention(config, causal=config.causal)
         # self.attention = CausalSelfAttention(
         #     num_heads=config.n_head,
         #     embed_dimension=config.n_embed,
@@ -125,7 +128,7 @@ class MultiHeadAttention(nn.Module):
         # )
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        return self.attention(x)
+        return self.attention.forward(x)
 
 
 class Block(nn.Module):
