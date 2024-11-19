@@ -128,17 +128,19 @@ class MultiHeadAttention(nn.Module):
         # )
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        return self.attention.forward(x)
+        return self.attention.forward(x + pos_emb)
 
 
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.attention = MultiHeadAttention(config)
+        self.l_norm = nn.LayerNorm(config.n_embed)
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb):
         x = x + self.attention(x, pos_emb, pos_dist_emb)
+        x = self.l_norm(x)
         x = x + self.ffwd(x)
         return x
 
