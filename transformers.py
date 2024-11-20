@@ -76,11 +76,11 @@ class TorchTransformerModel(AbstractModel):
     def forward(self, inp):
         x = inp
         b, t, c = x.shape
-        x = self.ffwd1.forward(x)
-        pos_emb = self.pos_emb1.forward(b, t)
-        pos_dist_emb = self.pos_dist_emb1.forward(b)
-        x = self.t1.forward(x, pos_emb, pos_dist_emb)
-        x = self.ffwd2.forward(x)
+        x = self.ffwd1(x)
+        pos_emb = self.pos_emb1(b, t)
+        pos_dist_emb = self.pos_dist_emb1(b)
+        x = self.t1(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2(x)
         return x
 
 
@@ -119,11 +119,11 @@ class FlashTransformerModel(AbstractModel):
     def forward(self, inp):
         x = inp
         b, t, c = x.shape
-        x = self.ffwd1.forward(x)
-        pos_emb = self.pos_emb1.forward(b, t)
-        pos_dist_emb = self.pos_dist_emb1.forward(b)
-        x = self.t1.forward(x, pos_emb, pos_dist_emb)
-        x = self.ffwd2.forward(x)
+        x = self.ffwd1(x)
+        pos_emb = self.pos_emb1(b, t)
+        pos_dist_emb = self.pos_dist_emb1(b)
+        x = self.t1(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2(x)
         return x
 
 
@@ -183,19 +183,19 @@ class ConvKarpathyTransformerModel(AbstractModel):
         x = self.conv1d1(x)  # Apply convolution
         x = x.permute(0, 2, 1)
 
-        x = self.ffwd0.forward(x)
+        x = self.ffwd0(x)
 
         x = x.permute(0, 2, 1)
         x = self.conv1d2(x)  # Apply convolution
         x = x.permute(0, 2, 1)  # Convert back to (batch_size, seq_len, channels)
         # x now has shape: (batch_size, seq_len, n_embed)
 
-        x = self.ffwd1.forward(x)
+        x = self.ffwd1(x)
 
-        pos_emb = self.pos_emb1.forward(b, t)
-        pos_dist_emb = self.pos_dist_emb1.forward(b)
-        x = self.t1.forward(x, pos_emb, pos_dist_emb)
-        x = self.ffwd2.forward(x)
+        pos_emb = self.pos_emb1(b, t)
+        pos_dist_emb = self.pos_dist_emb1(b)
+        x = self.t1(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2(x)
         return x
 
 
@@ -232,17 +232,20 @@ class NNAttentionHead(nn.Module):
         a2 = torch.cat([a2, pos_dist_emb], dim=-1)  # (B,T,T,C)
         # a2 = torch.cat([k, q, pos_emb], dim=-1)   # (B,T,T,C)
 
-        a2 = self.att.forward(a2)  # (B,T,T,C * 2) -> (B,T,T,1)
+        a2 = self.att(a2)  # (B,T,T,C * 2) -> (B,T,T,1)
 
         wei = a2.squeeze(dim=-1) * c ** -0.5
 
         # compute attention scores ("affinities")
         wei = wei.masked_fill(self.tril[:t, :t] == 0, float('-inf'))  # (B, T, T)
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
-        wei = self.dropout(wei)
+
         # perform the weighted aggregation of the values
         v = self.value(x)  # (B,T,C)
         out = wei @ v  # (B, T, T) @ (B, T, C) -> (B, T, C)
+
+        out = self.dropout(out)
+
         return out
 
 
@@ -284,13 +287,14 @@ class KarpathyTransformerModel(AbstractModel):
 
         b, t, c = x.shape
 
-        x = self.ffwd1.forward(x)
+        x = self.ffwd1(x)
 
-        pos_emb = self.pos_emb1.forward(b, t)
-        pos_dist_emb = self.pos_dist_emb1.forward(b)
+        pos_emb = self.pos_emb1(b, t)
+        pos_dist_emb = self.pos_dist_emb1(b)
 
-        x = self.t1.forward(x, pos_emb, pos_dist_emb)
+        x = self.t1(x, pos_emb, pos_dist_emb)
 
-        x = self.ffwd2.forward(x)
+        x = self.ffwd2(x)
 
         return x
+

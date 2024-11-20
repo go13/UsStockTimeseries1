@@ -267,7 +267,7 @@ class Block(nn.Module):
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        x = x + self.attention.forward(x, pos_emb, pos_dist_emb)
+        x = x + self.attention(x, pos_emb, pos_dist_emb)
         x = self.l_norm(x)
         x = x + self.ffwd.forward(x)
         return x
@@ -356,6 +356,7 @@ class AbstractRunner(object):
             print(f"Model version {model_version} not found")
             return False
         self.model.load_state_dict(torch.load(f"model-{model_version}.pt", map_location=torch.device(self.config.my_device)))
+        self.model = self.model.to(self.config.my_device)
         print(f"loaded model version {model_version}")
         return True
 
@@ -403,11 +404,8 @@ class AbstractModel(ModelInterface):
         super().__init__(config)
         self.config = config
 
-    def generate(self, inp, max_new_tokens):
-        raise NotImplementedError()
-
-
     def forward_vs_target(self, inp, targets):
+        self.train()
         output = self.forward(inp)
         b, t, c = output.shape
         logits_view = output.view(b * t, c)
@@ -416,14 +414,26 @@ class AbstractModel(ModelInterface):
         loss = mse_loss(logits_view, targets)
         return output, loss
 
-    def generate(self, inp, max_new_tokens):
-        for _ in range(max_new_tokens):
-            x = inp
-            x = self.forward(x)
-            x = x[-1]
-            inp = torch.cat([inp, x.unsqueeze(0)], dim=0)
-        return inp
+    @torch.no_grad()
+    def gen(self, inp):
+        self.eval()
+        return self.forward(inp)
 
+    @torch.no_grad()
+    def generate(self, inp, max_new_tokens):
+        self.eval()
+        outputs = []
+
+        for _ in range(max_new_tokens):
+            x = self.forward(inp)  # Forward pass
+            x_next = x[:, -1:, :]  # Get the last timestep's prediction
+            outputs.append(x_next)  # Collect the prediction
+            # Append the new prediction and drop the oldest time point
+            inp = torch.cat([inp[:, 1:, :], x_next], dim=1)
+
+        # Stack collected outputs into a tensor
+        outp = torch.cat(outputs, dim=1)  # (batch, max_new_tokens, features)
+        return outp
 
 class TransformerRunner(AbstractRunner):
     def __init__(self, config, model:ModelInterface, in_data, out_data):
@@ -434,7 +444,6 @@ class TransformerRunner(AbstractRunner):
         )
         pass
 
-    @torch.no_grad()
     def generate(self, context, max_new_tokens):
         return self.model.generate(context, max_new_tokens)
 
