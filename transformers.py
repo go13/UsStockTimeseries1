@@ -85,7 +85,7 @@ class TorchTransformerModel(AbstractModel):
 
 
 class FlashMultiHeadAttention(nn.Module):
-    def __init__(self, config: TransformerConfig, causal=True):
+    def __init__(self, config: TransformerConfig):
         super().__init__()
         assert torch.bfloat16 == config.precision, 'only bfloat16 is supported - checked 20 aug 23'
 
@@ -100,21 +100,12 @@ class FlashMultiHeadAttention(nn.Module):
             return_residual=True,
             dwconv=True,
             rotary_emb_dim=config.head_size,
-            causal=causal  # auto-regressive or not
+            causal=config.causal  # auto-regressive or not
         )
 
-    def forward(self, x):
+    def forward(self, x, pos_emb, pos_dist_emb):
         out = self.flash_mha(x)[0]
         return out
-class FlashMultiHeadAttention(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.attention = FlashMultiHeadAttention(config, causal=config.causal)
-
-
-    def forward(self, x, pos_emb, pos_dist_emb):
-        return self.attention.forward(x + pos_emb)
-
 
 class FlashTransformerModel(AbstractModel):
     def __init__(self, config):

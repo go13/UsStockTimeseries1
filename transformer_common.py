@@ -267,7 +267,7 @@ class Block(nn.Module):
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        x = x + self.attention(x, pos_emb, pos_dist_emb)
+        x = x + self.attention.forward(x, pos_emb, pos_dist_emb)
         x = self.l_norm(x)
         x = x + self.ffwd.forward(x)
         return x
