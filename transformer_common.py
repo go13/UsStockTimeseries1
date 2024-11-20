@@ -426,14 +426,15 @@ class AbstractModel(ModelInterface):
 
         for _ in range(max_new_tokens):
             x = self.forward(inp)  # Forward pass
-            x_next = x[:, -1:, :]  # Get the last timestep's prediction
-            outputs.append(x_next)  # Collect the prediction
-            # Append the new prediction and drop the oldest time point
-            inp = torch.cat([inp[:, 1:, :], x_next], dim=1)
+            x = x[:, -1:, :]
+            outputs.append(x)
+
+            inp = torch.cat([inp[:, 1:, :], x], dim=1)
 
         # Stack collected outputs into a tensor
         outp = torch.cat(outputs, dim=1)  # (batch, max_new_tokens, features)
-        return outp
+        combined = torch.cat([inp, outp], dim=1)  # Concatenate along the sequence dimension
+        return combined
 
 class TransformerRunner(AbstractRunner):
     def __init__(self, config, model:ModelInterface, in_data, out_data):
