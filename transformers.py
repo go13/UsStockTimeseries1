@@ -76,11 +76,11 @@ class TorchTransformerModel(AbstractModel):
     def forward(self, inp):
         x = inp
         b, t, c = x.shape
-        x = self.ffwd1(x)
-        pos_emb = self.pos_emb1(b, t)
-        pos_dist_emb = self.pos_dist_emb1(b)
-        x = self.t1(x, pos_emb, pos_dist_emb)
-        x = self.ffwd2(x)
+        x = self.ffwd1.forward(x)
+        pos_emb = self.pos_emb1.forward(b, t)
+        pos_dist_emb = self.pos_dist_emb1.forward(b)
+        x = self.t1.forward(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2.forward(x)
         return x
 
 
@@ -128,11 +128,11 @@ class FlashTransformerModel(AbstractModel):
     def forward(self, inp):
         x = inp
         b, t, c = x.shape
-        x = self.ffwd1(x)
-        pos_emb = self.pos_emb1(b, t)
-        pos_dist_emb = self.pos_dist_emb1(b)
-        x = self.t1(x, pos_emb, pos_dist_emb)
-        x = self.ffwd2(x)
+        x = self.ffwd1.forward(x)
+        pos_emb = self.pos_emb1.forward(b, t)
+        pos_dist_emb = self.pos_dist_emb1.forward(b)
+        x = self.t1.forward(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2.forward(x)
         return x
 
 
