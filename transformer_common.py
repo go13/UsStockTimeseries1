@@ -2,6 +2,194 @@ from torch import nn as nn
 import torch
 import time
 import os
+import pandas as pd
+
+class DataloaderInterface:
+    def get_batch(self, split):
+        raise NotImplementedError()
+
+    def get_train_batch(self):
+        raise NotImplementedError()
+
+    def get_val_batch(self):
+        raise NotImplementedError()
+
+class TransformerConfig:
+    def __init__(self,
+                 precision=torch.bfloat16,
+                 batch_size=64,
+                 block_size=32,
+                 input_embed=64,
+                 n_embed=64,
+                 output_embed=64,
+                 n_head=4,
+                 n_layer=4,
+                 causal=True,
+                 learning_rate=1e-3,
+                 my_device=None,
+                 dropout=0.1
+                 ):
+
+        self.my_device = get_device(my_device)
+
+        print(f"Using device: {self.my_device}")
+
+        self.causal = causal
+
+        self.batch_size = batch_size
+        self.block_size = block_size
+        self.input_embed = input_embed
+        self.n_embed = n_embed
+        self.output_embed = output_embed
+        self.hidden_size = self.n_embed * 4
+
+        self.n_head = n_head
+        self.n_layer = n_layer
+        self.dropout = dropout
+        self.head_size = self.n_embed // self.n_head
+
+        self.eval_interval = 50
+        self.learning_rate = learning_rate
+        self.eval_iters = 50
+
+        self.precision = precision
+
+        self.save_model_periodically_every_n_iterations = 500
+
+
+def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01', end_date='2020-12-31'):
+    print(f"Reading and merging CSV files: {filenames}")
+    # Initialize an empty DataFrame
+    data = pd.DataFrame()
+    found_files = 0
+    # Iterate through the specified filenames
+    for filename in filenames:
+        file_path = os.path.join(directory_path, filename) + '.csv'
+
+        if os.path.isfile(file_path) and file_path.endswith('.csv'):
+            # Read the CSV file
+            file_data = pd.read_csv(file_path)
+
+            if file_data.empty:
+                print(f"File {file_path} is empty")
+                continue
+
+            # Extract the 'Date' and 'Close' columns
+            file_data = file_data[['Date', 'Close']]
+
+            # Rename the 'Close' column to the file's name without the '.csv' extension
+            file_data = file_data.rename(columns={'Close': filename})
+
+            # Merge the data into the main DataFrame
+            if data.empty:
+                data = file_data
+            else:
+                data = data.merge(file_data, on='Date', how='outer')
+
+            found_files += 1
+            print(f"Merged {file_path}, found files={found_files}")
+        else:
+            print(f"File {file_path} not found")
+
+    data = data.fillna(method='bfill').reset_index(drop=True)
+    data['Date'] = pd.to_datetime(data['Date'], utc=True)
+    data = data.reset_index(drop=True)
+    data = data.sort_values(by='Date')
+
+    start_date = pd.Timestamp(start_date, tz='UTC')
+    end_date = pd.Timestamp(end_date, tz='UTC')
+    data = data.loc[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
+    data = data.fillna(method='bfill').reset_index(drop=True)
+
+    return data, found_files
+
+
+class GenericDataloader(DataloaderInterface):
+
+    def __init__(self, config: TransformerConfig, in_data, out_data):
+
+        self.config = config
+        self.in_data = in_data.to(self.config.my_device).to(config.precision)
+        self.out_data = out_data.to(self.config.my_device).to(config.precision)
+        self.config = config
+
+        n = int(0.9 * len(self.in_data))  # first 90% will be trained, rest val
+        self.in_train_data = self.in_data[:n]
+        self.in_val_data = self.in_data[n:]
+
+        self.out_train_data = self.out_data[:n]
+        self.out_val_data = self.out_data[n:]
+
+    def get_batch(self, split):
+        # generate a small batch of data of inputs x and targets y
+        in_data = self.in_train_data if split == 'train' else self.in_val_data
+        out_data = self.out_train_data if split == 'train' else self.out_val_data
+
+        ix = torch.randint(len(in_data) - self.config.block_size, (self.config.batch_size,))
+
+        x = torch.stack([in_data[i:i + self.config.block_size] for i in ix])
+        y = torch.stack([out_data[i + 1:i + self.config.block_size + 1] for i in ix])
+
+        x, y = x.to(self.config.my_device), y.to(self.config.my_device)
+
+        # print(x.shape, y.shape)
+        return x, y
+
+    def get_train_batch(self):
+        return self.get_batch('train')
+
+    def get_val_batch(self):
+        return self.get_batch('test')
+
+
+class TimeseriesDataloader(DataloaderInterface):
+
+    def __init__(self, directory_path, stocks_to_load, my_device='cuda', add_diff=True):
+
+        df, found_files = read_and_merge_csv_files(
+            directory_path,
+            stocks_to_load,
+            start_date='2000-01-01',
+            end_date='2020-12-31'
+        )
+
+        df.drop(columns=['Date'], axis=1, inplace=True)
+
+        prices = torch.tensor(df.values, dtype=torch.float, device=my_device)
+
+        if add_diff:
+            prices_diff = torch.diff(prices, dim=0)
+            self.number_of_channels = found_files * 2
+            self.data = torch.concat([prices[1:], prices_diff], dim=1)
+        else:
+            self.data = prices
+            self.number_of_channels = found_files
+
+        n = int(0.9 * len(self.data))  # first 90% will be trained, rest - eval
+        self.train_data = self.data[:n]
+        self.val_data = self.data[n:]
+
+        self.found_files = found_files
+
+        print("Found files: ", found_files)
+
+    def n_channels(self):
+        return self.number_of_channels
+
+    def get_train_data(self):
+        return self.train_data
+
+    def get_val_data(self):
+        return self.val_data
+
+    def get_data(self):
+        return self.data
+
+
+def distance_triangle(n, my_device):
+    arange_matrix = torch.arange(n, device=my_device).view(-1, 1) - torch.arange(n, device=my_device).view(1, -1)
+    lower_triangular = torch.tril(arange_matrix)
+    return lower_triangular
 
 def dict_weights_to_vector(w):
     w = [v for v in w.values()]
@@ -20,46 +208,6 @@ def get_device(my_device):
     else:
         return 'cpu'
 
-class TransformerConfig:
-    def __init__(self,
-                 precision=torch.bfloat16,
-                 batch_size=64,
-                 block_size=32,
-                 input_embed=64,
-                 n_embed=64,
-                 output_embed=64,
-                 n_head=4,
-                 n_layer=4,
-                 causal=True,
-                 learning_rate=1e-3,
-                 my_device=None
-                 ):
-
-        self.my_device = get_device(my_device)
-
-        print(f"Using device: {self.my_device}")
-
-        self.causal = causal
-
-        self.batch_size = batch_size
-        self.block_size = block_size
-        self.input_embed = input_embed
-        self.n_embed = n_embed
-        self.output_embed = output_embed
-        self.hidden_size = self.n_embed * 4
-
-        self.n_head = n_head
-        self.n_layer = n_layer
-        self.dropout = 0.1
-        self.head_size = self.n_embed // self.n_head
-
-        self.eval_interval = 50
-        self.learning_rate = learning_rate
-        self.eval_iters = 200
-
-        self.precision = precision
-
-        self.save_model_periodically_every_n_iterations = 500
 
 
 class GeluFeedForward(nn.Module):
@@ -76,15 +224,64 @@ class GeluFeedForward(nn.Module):
         return self.net(x)
 
 
-class DataloaderInterface:
-    def get_batch(self, split):
-        raise NotImplementedError()
+class PositionalEmbedding(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embed)
+        self.position_embedding_ff = GeluFeedForward(config.n_embed, config.n_embed, config.n_embed, config.dropout)
+        self.position_embedding_ff_ln = nn.LayerNorm(config.n_embed)
 
-    def get_train_batch(self):
-        raise NotImplementedError()
+    def forward(self, b, t):
+        pos_embedding_arrange = torch.arange(t, device=self.config.my_device)
+        pos_emb = self.position_embedding_table(pos_embedding_arrange).repeat(b, 1, 1)
+        pos_emb = self.position_embedding_ff.forward(pos_emb)
+        pos_emb = self.position_embedding_ff_ln(pos_emb)
+        return pos_emb
 
-    def get_val_batch(self):
-        raise NotImplementedError()
+
+class DistancePositionalEmbedding(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.position_embedding_table = nn.Embedding(config.block_size, config.n_embed)
+        self.position_embedding_ff = GeluFeedForward(
+            config.n_embed,
+            config.n_embed,
+            config.n_embed * 2,
+            config.dropout
+        )
+
+    def forward(self, b):
+        pos_embedding_arrange = distance_triangle(self.config.block_size, self.config.my_device)
+        pos_emb = self.position_embedding_table(pos_embedding_arrange)
+        pos_emb = pos_emb.repeat(b, 1, 1, 1)
+        pos_emb = self.position_embedding_ff.forward(pos_emb)
+        return pos_emb
+
+class Block(nn.Module):
+    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
+        super().__init__()
+        self.attention = attention_provider()
+        self.l_norm = nn.LayerNorm(config.n_embed)
+        self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
+
+    def forward(self, x, pos_emb, pos_dist_emb):
+        x = x + self.attention(x, pos_emb, pos_dist_emb)
+        x = self.l_norm(x)
+        x = x + self.ffwd.forward(x)
+        return x
+
+
+class BlockSequence(nn.Module):
+    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
+        super().__init__()
+        self.blocks = nn.Sequential(*[Block(config, attention_provider) for _ in range(config.n_layer)])
+
+    def forward(self, x, pos_emb, pos_dist_emb):
+        for block in self.blocks:
+            x = block(x, pos_emb, pos_dist_emb)
+        return x
 
 
 class AbstractRunner(object):
@@ -185,3 +382,59 @@ class AbstractRunner(object):
 
     def generate(self, *args):
         raise NotImplementedError()
+
+
+class ModelInterface(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+    def forward_vs_target(self, inp, targets):
+        raise NotImplementedError()
+
+    def forward(self, inp):
+        raise NotImplementedError()
+
+    def generate(self, inp, max_new_tokens):
+        raise NotImplementedError()
+
+class AbstractModel(ModelInterface):
+    def __init__(self, config):
+        super().__init__(config)
+        self.config = config
+
+    def generate(self, inp, max_new_tokens):
+        raise NotImplementedError()
+
+
+    def forward_vs_target(self, inp, targets):
+        output = self.forward(inp)
+        b, t, c = output.shape
+        logits_view = output.view(b * t, c)
+        targets = targets.view(b * t, -1)
+        mse_loss = torch.nn.MSELoss(reduction='mean')
+        loss = mse_loss(logits_view, targets)
+        return output, loss
+
+    def generate(self, inp, max_new_tokens):
+        for _ in range(max_new_tokens):
+            x = inp
+            x = self.forward(x)
+            x = x[-1]
+            inp = torch.cat([inp, x.unsqueeze(0)], dim=0)
+        return inp
+
+
+class TransformerRunner(AbstractRunner):
+    def __init__(self, config, model:ModelInterface, in_data, out_data):
+        super().__init__(
+            config,
+            model,
+            GenericDataloader(config, in_data, out_data)
+        )
+        pass
+
+    @torch.no_grad()
+    def generate(self, context, max_new_tokens):
+        return self.model.generate(context, max_new_tokens)
+
