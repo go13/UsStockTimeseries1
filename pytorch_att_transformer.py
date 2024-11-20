@@ -118,14 +118,14 @@ class DistancePositionalEmbedding(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.attention = FlashMultiHeadAttention(config, causal=config.causal)
-        # self.attention = CausalSelfAttention(
-        #     num_heads=config.n_head,
-        #     embed_dimension=config.n_embed,
-        #     bias=False,
-        #     is_causal=config.causal,
-        #     dropout=config.dropout
-        # )
+        # self.attention = FlashMultiHeadAttention(config, causal=config.causal)
+        self.attention = CausalSelfAttention(
+            num_heads=config.n_head,
+            embed_dimension=config.n_embed,
+            bias=False,
+            is_causal=config.causal,
+            dropout=config.dropout
+        )
 
     def forward(self, x, pos_emb, pos_dist_emb):
         return self.attention.forward(x + pos_emb)
@@ -179,6 +179,85 @@ class KarpathyTransformerModel(nn.Module):
         x = inp
         b, t, c = x.shape
         x = self.ffwd1(x)
+        pos_emb = self.pos_emb1(b, t)
+        pos_dist_emb = self.pos_dist_emb1(b)
+        x = self.t1(x, pos_emb, pos_dist_emb)
+        x = self.ffwd2(x)
+        return x
+
+    def generate(self, inp, max_new_tokens):
+        for _ in range(max_new_tokens):
+            x = inp
+            x = self.forward(x)
+            x = x[-1]
+            inp = torch.cat([inp, x.unsqueeze(0)], dim=0)
+        return inp
+
+
+class ConvKarpathyTransformerModel(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        conv_output1 = 8
+        conv_output2 = 4
+        self.config = config
+        self.conv1d1 = nn.Conv1d(
+            in_channels=config.input_embed,
+            out_channels=config.input_embed * conv_output1,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=config.input_embed
+        )
+        self.ffwd0 = GeluFeedForward(
+            config.input_embed * conv_output1,
+            config.hidden_size,
+            config.input_embed * conv_output2,
+            config.dropout,
+            bias=False
+        )
+        self.conv1d2 = nn.Conv1d(
+            in_channels=config.input_embed * conv_output2,
+            out_channels=config.input_embed * conv_output2,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            groups=config.input_embed
+        )
+        self.pos_emb1 = PositionalEmbedding(config)
+        self.pos_dist_emb1 = DistancePositionalEmbedding(config)
+        self.ffwd1 = GeluFeedForward(config.input_embed * conv_output2, config.hidden_size, config.n_embed,
+                                     config.dropout, bias=False)
+        self.t1 = BlockSequence(config)
+        self.ffwd2 = GeluFeedForward(config.n_embed, config.hidden_size, config.output_embed, config.dropout,
+                                     bias=False)
+
+    def forward_vs_target(self, inp, targets):
+        output = self.forward(inp)
+        b, t, c = output.shape
+        logits_view = output.view(b * t, c)
+        targets = targets.view(b * t, -1)
+        mse_loss = torch.nn.MSELoss(reduction='mean')
+        loss = mse_loss(logits_view, targets)
+        return output, loss
+
+    def forward(self, inp):
+        x = inp
+        b, t, c = x.shape
+
+        # Apply convolution; adjust shape for Conv1d
+        x = x.permute(0, 2, 1)  # Convert to (batch_size, channels, seq_len)
+        x = self.conv1d1(x)  # Apply convolution
+        x = x.permute(0, 2, 1)
+
+        x = self.ffwd0(x)
+
+        x = x.permute(0, 2, 1)
+        x = self.conv1d2(x)  # Apply convolution
+        x = x.permute(0, 2, 1)  # Convert back to (batch_size, seq_len, channels)
+        # x now has shape: (batch_size, seq_len, n_embed)
+
+        x = self.ffwd1(x)
+
         pos_emb = self.pos_emb1(b, t)
         pos_dist_emb = self.pos_dist_emb1(b)
         x = self.t1(x, pos_emb, pos_dist_emb)
