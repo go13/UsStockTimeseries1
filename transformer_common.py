@@ -259,17 +259,31 @@ class DistancePositionalEmbedding(nn.Module):
         pos_emb = self.position_embedding_ff.forward(pos_emb)
         return pos_emb
 
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
 class Block(nn.Module):
     def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
         super().__init__()
+        self.l_norm1 = RMSNorm(config.n_embed)
         self.attention = attention_provider()
-        self.l_norm = nn.LayerNorm(config.n_embed)
+        self.l_norm2 = RMSNorm(config.n_embed)
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        x = x + self.attention(x, pos_emb, pos_dist_emb)
-        x = self.l_norm(x)
-        x = x + self.ffwd.forward(x)
+        inp = self.l_norm1(x)
+        x = x + self.attention(inp, pos_emb, pos_dist_emb)
+        x = x + self.ffwd.forward(self.l_norm2(x))
         return x
 
 
