@@ -4,6 +4,7 @@ import time
 import os
 import pandas as pd
 
+
 class DataloaderInterface:
     def get_batch(self, split):
         raise NotImplementedError()
@@ -13,6 +14,7 @@ class DataloaderInterface:
 
     def get_val_batch(self):
         raise NotImplementedError()
+
 
 class TransformerConfig:
     def __init__(self,
@@ -29,7 +31,6 @@ class TransformerConfig:
                  my_device=None,
                  dropout=0.1
                  ):
-
         self.my_device = get_device(my_device)
 
         print(f"Using device: {self.my_device}")
@@ -107,7 +108,6 @@ def read_and_merge_csv_files(directory_path, filenames, start_date='2010-01-01',
 class GenericDataloader(DataloaderInterface):
 
     def __init__(self, config: TransformerConfig, in_data, out_data):
-
         self.config = config
         self.in_data = in_data.to(self.config.my_device).to(config.precision)
         self.out_data = out_data.to(self.config.my_device).to(config.precision)
@@ -191,10 +191,12 @@ def distance_triangle(n, my_device):
     lower_triangular = torch.tril(arange_matrix)
     return lower_triangular
 
+
 def dict_weights_to_vector(w):
     w = [v for v in w.values()]
     w = torch.cat([v.flatten() for v in w])
     return w
+
 
 def get_device(my_device):
     if my_device is not None:
@@ -207,7 +209,6 @@ def get_device(my_device):
         return 'mps'
     else:
         return 'cpu'
-
 
 
 class GeluFeedForward(nn.Module):
@@ -259,6 +260,7 @@ class DistancePositionalEmbedding(nn.Module):
         pos_emb = self.position_embedding_ff.forward(pos_emb)
         return pos_emb
 
+
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -272,8 +274,9 @@ class RMSNorm(torch.nn.Module):
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
 
+
 class Block(nn.Module):
-    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
+    def __init__(self, config: TransformerConfig, attention_provider: lambda: nn.Module):
         super().__init__()
         self.l_norm1 = RMSNorm(config.n_embed)
         self.attention = attention_provider()
@@ -288,7 +291,7 @@ class Block(nn.Module):
 
 
 class BlockSequence(nn.Module):
-    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
+    def __init__(self, config: TransformerConfig, attention_provider: lambda: nn.Module):
         super().__init__()
         self.blocks = nn.Sequential(*[Block(config, attention_provider) for _ in range(config.n_layer)])
 
@@ -302,7 +305,7 @@ class AbstractRunner(object):
     def __init__(self, config: TransformerConfig, model: nn.Module, data_loader: DataloaderInterface):
         self.model = model.to(config.my_device, dtype=config.precision)
         self.parameters = self.model.parameters()
-        self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs") # , fullgraph=True
+        self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs")  # , fullgraph=True
         self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate)
         self.config = config
         self.current_iteration = 0
@@ -369,7 +372,8 @@ class AbstractRunner(object):
         if not os.path.exists(f"model-{model_version}.pt"):
             print(f"Model version {model_version} not found")
             return False
-        self.model.load_state_dict(torch.load(f"model-{model_version}.pt", map_location=torch.device(self.config.my_device)))
+        self.model.load_state_dict(
+            torch.load(f"model-{model_version}.pt", map_location=torch.device(self.config.my_device)))
         self.model = self.model.to(self.config.my_device)
         print(f"loaded model version {model_version}")
         return True
@@ -413,6 +417,7 @@ class ModelInterface(nn.Module):
     def generate(self, inp, max_new_tokens):
         raise NotImplementedError()
 
+
 class AbstractModel(ModelInterface):
     def __init__(self, config):
         super().__init__(config)
@@ -453,7 +458,7 @@ class AbstractModel(ModelInterface):
 
 
 class TransformerRunner(AbstractRunner):
-    def __init__(self, config, model:ModelInterface, in_data, out_data):
+    def __init__(self, config, model: ModelInterface, in_data, out_data):
         super().__init__(
             config,
             model,
@@ -463,4 +468,3 @@ class TransformerRunner(AbstractRunner):
 
     def generate(self, context, max_new_tokens):
         return self.model.generate(context, max_new_tokens)
-
