@@ -211,6 +211,19 @@ def get_device(my_device):
         return 'cpu'
 
 
+class RMSNorm(torch.nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
 class GeluFeedForward(nn.Module):
     def __init__(self, inp_n_embd, hidden_n_embd, out_n_embd, dropout, bias=False):
         super().__init__()
@@ -231,7 +244,7 @@ class PositionalEmbedding(nn.Module):
         self.config = config
         self.position_embedding_table = nn.Embedding(config.block_size, config.n_embed)
         self.position_embedding_ff = GeluFeedForward(config.n_embed, config.n_embed, config.n_embed, config.dropout)
-        self.position_embedding_ff_ln = nn.LayerNorm(config.n_embed)
+        self.position_embedding_ff_ln = RMSNorm(config.n_embed)
 
     def forward(self, b, t):
         pos_embedding_arrange = torch.arange(t, device=self.config.my_device)
@@ -261,22 +274,8 @@ class DistancePositionalEmbedding(nn.Module):
         return pos_emb
 
 
-class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
-
-
 class Block(nn.Module):
-    def __init__(self, config: TransformerConfig, attention_provider: lambda: nn.Module):
+    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
         super().__init__()
         self.l_norm1 = RMSNorm(config.n_embed)
         self.attention = attention_provider()
@@ -284,8 +283,7 @@ class Block(nn.Module):
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb):
-        inp = self.l_norm1(x)
-        x = x + self.attention(inp, pos_emb, pos_dist_emb)
+        x = x + self.attention(self.l_norm1(x), pos_emb, pos_dist_emb)
         x = x + self.ffwd.forward(self.l_norm2(x))
         return x
 
@@ -348,12 +346,13 @@ class AbstractRunner(object):
         t = time.time()
         for _ in range(n_iter):
             if eval_interval != -1 and self.current_iteration % eval_interval == 0:
+                torch.cuda.synchronize()
                 t_taken = time.time() - t
                 train_losses = torch.sqrt(self.evaluate(get_train_batch, self.config.eval_iters))
                 val_losses = torch.sqrt(self.evaluate(get_val_batch, self.config.eval_iters))
                 print(
                     f"step {self.current_iteration}: rmse train loss {train_losses:.4f}, rmse val loss {val_losses:.4f}, sec/iter {t_taken / eval_interval}")
-
+                torch.cuda.synchronize()
                 t = time.time()
 
                 if self.config.save_model_periodically_every_n_iterations != -1 and self.current_iteration % self.config.save_model_periodically_every_n_iterations == 0:

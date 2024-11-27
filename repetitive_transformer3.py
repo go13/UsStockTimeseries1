@@ -37,9 +37,9 @@ class TorchMultiHeadAttention3(nn.Module):
 
     def forward(self, x, pos_emb, pos_dist_emb, c_attn_trans):
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        query_projected = self.c_attn(x)
+        query_projected = self.c_attn(x + pos_emb)
 
-        c_attn_trans = query_projected + c_attn_trans(query_projected)
+        query_projected = query_projected + c_attn_trans(query_projected)
 
         batch_size = query_projected.size(0)
         embed_dim = query_projected.size(2)
@@ -75,7 +75,6 @@ class Block3(nn.Module):
         self.ffwd = GeluFeedForward(config.n_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
 
     def forward(self, x, pos_emb, pos_dist_emb, c_attn_trans):
-        x = pos_emb + x
         x = x + self.attention(self.l_norm1(x), pos_emb, pos_dist_emb, c_attn_trans)
         x = x + self.ffwd.forward(self.l_norm2(x))
         return x
@@ -95,7 +94,7 @@ class TorchTransformerModel3(AbstractModel):
     def __init__(self, config):
         super().__init__(config)
         self.pos_emb1 = PositionalEmbedding(config)
-        self.pos_dist_emb1 = DistancePositionalEmbedding(config)
+        # self.pos_dist_emb1 = DistancePositionalEmbedding(config)
         self.c_attn_trans = GeluFeedForward(config.n_embed * 3, config.hidden_size * 3, config.n_embed * 3, config.dropout, bias=True)
         self.ffwd1 = GeluFeedForward(config.input_embed, config.hidden_size, config.n_embed, config.dropout, bias=False)
         self.t1 = BlockSequence3(config, lambda: TorchMultiHeadAttention3(config))
@@ -106,8 +105,9 @@ class TorchTransformerModel3(AbstractModel):
         b, t, c = x.shape
         x = self.ffwd1(x)
         pos_emb = self.pos_emb1(b, t)
-        pos_dist_emb = self.pos_dist_emb1(b)
+        pos_dist_emb = None # self.pos_dist_emb1(b)
         x = self.t1(x, pos_emb, pos_dist_emb, self.c_attn_trans)
         x = self.ffwd2(x)
         return x
+
 
