@@ -275,7 +275,7 @@ class DistancePositionalEmbedding(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config:TransformerConfig, attention_provider:lambda:nn.Module):
+    def __init__(self, config: TransformerConfig, attention_provider: lambda:nn.Module):
         super().__init__()
         self.l_norm1 = RMSNorm(config.n_embed)
         self.attention = attention_provider()
