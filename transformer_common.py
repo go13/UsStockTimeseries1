@@ -167,7 +167,7 @@ class InMemDataloader(DataloaderInterface):
         self.out_val_data = self.out_data[n:]
 
 
-    def prepare_train(self, split):
+    def prepare_batch(self, split):
         # generate a small batch of data of inputs x and targets y
         in_data = self.in_train_data if split == 'train' else self.in_val_data
         out_data = self.out_train_data if split == 'train' else self.out_val_data
@@ -199,7 +199,7 @@ class InMemDataloader(DataloaderInterface):
     def get_val_batch(self):
         return self.get_batch('test')
 
-    def prepare_data(self, iterations):
+    def prepare_train(self, iterations):
         self.cur_iteration = 0
         self.iterations = iterations
 
