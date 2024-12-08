@@ -3,9 +3,13 @@ import torch
 import time
 import os
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 class DataloaderInterface:
+    def prepare_train(self, iterations):
+        raise NotImplementedError()
+
     def get_batch(self, split):
         raise NotImplementedError()
 
@@ -29,7 +33,8 @@ class TransformerConfig:
                  causal=True,
                  learning_rate=1e-3,
                  my_device=None,
-                 dropout=0.1
+                 dropout=0.1,
+                 shift_output=1
                  ):
         self.my_device = get_device(my_device)
 
@@ -54,6 +59,7 @@ class TransformerConfig:
         self.eval_iters = 50
 
         self.precision = precision
+        self.shift_output = shift_output
 
         self.save_model_periodically_every_n_iterations = 500
 
@@ -127,12 +133,13 @@ class GenericDataloader(DataloaderInterface):
 
         ix = torch.randint(len(in_data) - self.config.block_size, (self.config.batch_size,))
 
+        sh = self.config.shift_output
+
         x = torch.stack([in_data[i:i + self.config.block_size] for i in ix])
-        y = torch.stack([out_data[i + 1:i + self.config.block_size + 1] for i in ix])
+        y = torch.stack([out_data[i + sh:i + self.config.block_size + sh] for i in ix])
 
         x, y = x.to(self.config.my_device), y.to(self.config.my_device)
 
-        # print(x.shape, y.shape)
         return x, y
 
     def get_train_batch(self):
@@ -141,6 +148,63 @@ class GenericDataloader(DataloaderInterface):
     def get_val_batch(self):
         return self.get_batch('test')
 
+    def prepare_train(self, iterations):
+        pass
+
+class InMemDataloader(DataloaderInterface):
+
+    def __init__(self, config: TransformerConfig, in_data, out_data):
+        self.config = config
+        self.in_data = in_data.to(self.config.my_device).to(config.precision)
+        self.out_data = out_data.to(self.config.my_device).to(config.precision)
+        self.config = config
+
+        n = int(0.9 * len(self.in_data))  # first 90% will be trained, rest val
+        self.in_train_data = self.in_data[:n]
+        self.in_val_data = self.in_data[n:]
+
+        self.out_train_data = self.out_data[:n]
+        self.out_val_data = self.out_data[n:]
+
+
+    def prepare_train(self, split):
+        # generate a small batch of data of inputs x and targets y
+        in_data = self.in_train_data if split == 'train' else self.in_val_data
+        out_data = self.out_train_data if split == 'train' else self.out_val_data
+
+        ix = torch.randint(len(in_data) - self.config.block_size, (self.config.batch_size,))
+
+        sh = self.config.shift_output
+
+        x = torch.stack([in_data[i:i + self.config.block_size] for i in ix])
+        y = torch.stack([out_data[i + sh:i + self.config.block_size + sh] for i in ix])
+
+        xy = torch.stack([x.to(self.config.my_device), y.to(self.config.my_device)])
+
+        return xy
+
+    def get_batch(self, split):
+        # generate a small batch of data of inputs x and targets y
+        in_data = self.prepared_train_data if split == 'train' else self.prepared_val_data
+        x = in_data[self.cur_iteration][0]
+        y = in_data[self.cur_iteration][1]
+        self.cur_iteration += 1
+        if self.cur_iteration >= self.iterations:
+            self.cur_iteration = 0
+        return x, y
+
+    def get_train_batch(self):
+        return self.get_batch('train')
+
+    def get_val_batch(self):
+        return self.get_batch('test')
+
+    def prepare_data(self, iterations):
+        self.cur_iteration = 0
+        self.iterations = iterations
+
+        self.prepared_train_data = torch.stack([self.prepare_batch('train') for _ in range(self.iterations)])
+        self.prepared_val_data = torch.stack([self.prepare_batch('val') for _ in range(self.iterations)])
 
 class TimeseriesDataloader(DataloaderInterface):
 
@@ -238,6 +302,18 @@ class GeluFeedForward(nn.Module):
         return self.net(x)
 
 
+class LinearFeedForward(nn.Module):
+    def __init__(self, inp_n_embd, hidden_n_embd, out_n_embd, dropout, bias=False):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(inp_n_embd, out_n_embd, bias=bias),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
 class PositionalEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -275,7 +351,7 @@ class DistancePositionalEmbedding(nn.Module):
 
 
 class Block(nn.Module):
-    def __init__(self, config: TransformerConfig, attention_provider: lambda:nn.Module):
+    def __init__(self, config: TransformerConfig, attention_provider: lambda: nn.Module):
         super().__init__()
         self.l_norm1 = RMSNorm(config.n_embed)
         self.attention = attention_provider()
@@ -333,6 +409,7 @@ class AbstractRunner(object):
         return losses / eval_iters
 
     def train_iterate_n(self, n_iter):
+        self.data_loader.prepare_train(n_iter)
         self.train_iterate(n_iter, self.data_loader.get_train_batch, self.data_loader.get_val_batch)
 
     def train_iterate(self, n_iter, get_train_batch, get_val_batch):
@@ -346,13 +423,16 @@ class AbstractRunner(object):
         t = time.time()
         for _ in range(n_iter):
             if eval_interval != -1 and self.current_iteration % eval_interval == 0:
-                torch.cuda.synchronize()
+                if self.config.my_device == 'cuda':
+                    torch.cuda.synchronize()
                 t_taken = time.time() - t
                 train_losses = torch.sqrt(self.evaluate(get_train_batch, self.config.eval_iters))
                 val_losses = torch.sqrt(self.evaluate(get_val_batch, self.config.eval_iters))
                 print(
                     f"step {self.current_iteration}: rmse train loss {train_losses:.4f}, rmse val loss {val_losses:.4f}, sec/iter {t_taken / eval_interval}")
-                torch.cuda.synchronize()
+                if self.config.my_device == 'cuda':
+                    torch.cuda.synchronize()
+
                 t = time.time()
 
                 if self.config.save_model_periodically_every_n_iterations != -1 and self.current_iteration % self.config.save_model_periodically_every_n_iterations == 0:
@@ -428,17 +508,25 @@ class AbstractModel(ModelInterface):
         b, t, c = output.shape
         logits_view = output.view(b * t, c)
         targets = targets.view(b * t, -1)
+
         mse_loss = torch.nn.MSELoss(reduction='mean')
         loss = mse_loss(logits_view, targets)
+
+        # xentropy_loss = torch.nn.CrossEntropyLoss(reduction='mean')
+        # loss = xentropy_loss(logits_view, targets)
+
         return output, loss
 
     @torch.no_grad()
     def gen(self, inp):
         self.eval()
-        return self.forward(inp)
+        inp = inp.to(dtype=self.config.precision)
+        return self.forward(inp).to(dtype=self.config.precision)
 
     @torch.no_grad()
     def generate(self, inp, max_new_tokens):
+        inp = inp.to(dtype=self.config.precision)
+
         self.eval()
         outputs = []
         roll = inp
@@ -453,7 +541,7 @@ class AbstractModel(ModelInterface):
         # Stack collected outputs into a tensor
         outp = torch.cat(outputs, dim=1)  # (batch, max_new_tokens, features)
         combined = torch.cat([inp, outp], dim=1)  # Concatenate along the sequence dimension
-        return combined
+        return combined.to(dtype=self.config.precision)
 
 
 class TransformerRunner(AbstractRunner):
@@ -461,9 +549,53 @@ class TransformerRunner(AbstractRunner):
         super().__init__(
             config,
             model,
-            GenericDataloader(config, in_data, out_data)
+            # InMemDataloader(config, in_data.to(config.my_device), out_data.to(config.my_device))
+            GenericDataloader(config, in_data.to(config.my_device), out_data.to(config.my_device))
         )
         pass
 
     def generate(self, context, max_new_tokens):
         return self.model.generate(context, max_new_tokens)
+
+    def gen(self, context):
+        return self.model.gen(context)
+
+
+def plot_timeseries(tensor, num_charts=5):
+    """
+    Plots time-series data for multiple stocks from the tensor in a grid layout with 5 charts per row.
+
+    Parameters:
+    - tensor (torch.Tensor): Time-series data with shape [num_stocks, time_steps].
+    - num_charts (int): The number of charts to plot. Each chart corresponds to one stock.
+    """
+    # Check the number of stocks
+    num_stocks, num_time_steps = tensor.shape
+
+    # Ensure num_charts doesn't exceed the number of available stocks
+    num_charts = min(num_charts, num_stocks)
+
+    # Calculate the number of rows required for the grid
+    rows = (num_charts + 4) // 5  # This ensures that we have a full row for the remaining charts
+
+    # Create a figure with subplots
+    fig, axes = plt.subplots(rows, 5, figsize=(15, 3 * rows))
+
+    # Flatten axes array to easily index through them
+    axes = axes.flatten()
+
+    # Plot each stock's time-series data
+    for i in range(num_charts):
+        ax = axes[i]
+        ax.plot(tensor[i].cpu().numpy())  # Move tensor to CPU and convert to numpy for plotting
+        ax.set_title(f"Stock {i + 1} - Time Series")
+        ax.set_xlabel("Time Steps")
+        ax.set_ylabel("Stock Value")
+        ax.grid(True)
+
+    # Hide any unused subplots
+    for i in range(num_charts, len(axes)):
+        axes[i].axis('off')  # Hide the empty subplots
+
+    plt.tight_layout()  # Adjust the layout to avoid overlap
+    plt.show()
