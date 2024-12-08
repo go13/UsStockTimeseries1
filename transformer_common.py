@@ -379,7 +379,12 @@ class AbstractRunner(object):
     def __init__(self, config: TransformerConfig, model: nn.Module, data_loader: DataloaderInterface):
         self.model = model.to(config.my_device, dtype=config.precision)
         self.parameters = self.model.parameters()
-        self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs")  # , fullgraph=True
+        if config.my_device == 'cuda':
+            self.model = torch.compile(model, mode="max-autotune", backend="cudagraphs")  # , fullgraph=True
+        # elif config.my_device == 'mps':
+        #     self.model = torch.compile(model, mode="max-autotune", backend="inductor")
+        else:
+            self.model = torch.compile(model)
         self.optimizer = torch.optim.AdamW(self.parameters, lr=config.learning_rate)
         self.config = config
         self.current_iteration = 0
@@ -549,8 +554,8 @@ class TransformerRunner(AbstractRunner):
         super().__init__(
             config,
             model,
-            # InMemDataloader(config, in_data.to(config.my_device), out_data.to(config.my_device))
-            GenericDataloader(config, in_data.to(config.my_device), out_data.to(config.my_device))
+            # InMemDataloader(config, in_data, out_data)
+            GenericDataloader(config, in_data, out_data)
         )
         pass
 
@@ -559,6 +564,23 @@ class TransformerRunner(AbstractRunner):
 
     def gen(self, context):
         return self.model.gen(context)
+
+
+class GenericModelRunner(AbstractRunner):
+    def __init__(self, config, model: ModelInterface, dataloader: DataloaderInterface):
+        super().__init__(
+            config,
+            model,
+            dataloader
+        )
+        pass
+
+    def generate(self, context, max_new_tokens):
+        return self.model.generate(context, max_new_tokens)
+
+    def gen(self, context):
+        return self.model.gen(context)
+
 
 
 def plot_timeseries(tensor, num_charts=5):
@@ -599,3 +621,49 @@ def plot_timeseries(tensor, num_charts=5):
 
     plt.tight_layout()  # Adjust the layout to avoid overlap
     plt.show()
+
+
+def scale_timeseries_data(data, dim=0):
+    # Replace NaNs with zeros
+    data = torch.nan_to_num(data, nan=0.0)
+
+    # Standardize along the specified dimension
+    # Calculate mean and std along the specified dimension
+    mean = data.mean(dim=dim, keepdim=True)
+    std = data.std(dim=dim, keepdim=True)
+
+    # Avoid division by zero for dimensions with zero std
+    std[std == 0] = 1
+
+    # Scale the data (standardization)
+    scaled_data = (data - mean) / std
+
+    return scaled_data
+
+
+def filter_invalid_stocks(tensor):
+    """
+    Filters out stocks (rows) that have all zero values, all NaN values, or no price change (constant values) across their time series.
+
+    Parameters:
+    - tensor (torch.Tensor): Time-series data with shape [num_stocks, time_steps].
+
+    Returns:
+    - filtered_tensor (torch.Tensor): Tensor with invalid stocks removed.
+    """
+    # Replace NaNs with zeros in the tensor
+    tensor = torch.nan_to_num(tensor, nan=0.0)
+
+    # Identify stocks that have all zeroes or all NaNs (now converted to zeros)
+    non_zero_stocks = torch.any(tensor != 0, dim=1)  # Only keep rows (stocks) that have non-zero values
+
+    # Identify stocks where there is no price change (i.e., variance is zero)
+    non_constant_stocks = torch.var(tensor, dim=1) != 0  # Keep stocks with non-zero variance
+
+    # Combine both conditions (stocks with non-zero values and non-constant prices)
+    valid_stocks = non_zero_stocks & non_constant_stocks
+
+    # Filter out invalid stocks
+    filtered_tensor = tensor[valid_stocks]
+
+    return filtered_tensor
