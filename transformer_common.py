@@ -4,7 +4,7 @@ import time
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-
+from torch.nn import functional as F
 
 class DataloaderInterface:
     def prepare_train(self, iterations):
@@ -34,7 +34,8 @@ class TransformerConfig:
                  learning_rate=1e-3,
                  my_device=None,
                  dropout=0.1,
-                 shift_output=1
+                 shift_output=1,
+                 learning_type='mse'
                  ):
         self.my_device = get_device(my_device)
 
@@ -60,6 +61,10 @@ class TransformerConfig:
 
         self.precision = precision
         self.shift_output = shift_output
+        self.learning_type = learning_type
+
+        if not self.learning_type in ['mse', 'classify']:
+            raise ValueError('learning_type should be either "mse" or "classify"')
 
         self.save_model_periodically_every_n_iterations = 500
 
@@ -508,6 +513,12 @@ class AbstractModel(ModelInterface):
         self.config = config
 
     def forward_vs_target(self, inp, targets):
+        if self.config.learning_type == 'classify':
+            return self.forward_vs_target_classify(inp, targets)
+        else:
+            return self.forward_vs_target_mse(inp, targets)
+
+    def forward_vs_target_mse(self, inp, targets):
         self.train()
         output = self.forward(inp)
         b, t, c = output.shape
@@ -521,6 +532,20 @@ class AbstractModel(ModelInterface):
         # loss = xentropy_loss(logits_view, targets)
 
         return output, loss
+
+    def forward_vs_target_classify(self, inp, targets):
+        self.train()
+        logits = self.forward(inp)
+
+        b, t, outps = logits.shape
+        _, _, classez = targets.shape
+
+        logits_view = logits.view(b * t * classez, outps // classez)
+        targets = targets.view(b * t * classez)
+
+        loss = F.cross_entropy(logits_view, targets)
+
+        return logits_view, loss
 
     @torch.no_grad()
     def gen(self, inp):
